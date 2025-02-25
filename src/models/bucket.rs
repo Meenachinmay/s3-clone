@@ -58,4 +58,24 @@ impl Bucket {
 
         Ok(bucket)
     }
+
+    pub async fn find_by_user_id(
+        pool: &PgPool,
+        user_id: Uuid,
+    ) -> Result<Vec<Self>, sqlx::Error> {
+        let buckets = sqlx::query_as!(
+        Bucket,
+        r#"
+        SELECT id, name, user_id, created_at
+        FROM buckets
+        WHERE user_id = $1
+        ORDER BY created_at DESC
+        "#,
+        user_id
+    )
+            .fetch_all(pool)
+            .await?;
+
+        Ok(buckets)
+    }
 }

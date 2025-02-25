@@ -93,6 +93,22 @@ async fn main() -> std::io::Result<()> {
                 web::resource("/login")
                     .route(web::post().to(authentication::login))
             )
+            .service (
+                web::resource("/buckets")
+                    .wrap(AuthMiddleware {
+                        pool: pool.clone(),
+                        jwt_config: jwt_config.clone()
+                    })
+                    .route(web::get().to(bucket::list_buckets))
+            )
+            .service (
+                web::resource("/files")
+                    .wrap(AuthMiddleware {
+                        pool: pool.clone(),
+                        jwt_config: jwt_config.clone()
+                    })
+                    .route(web::get().to(file::list_files))
+            )
             .service(
                 web::resource("/create-bucket")
                     .wrap( AuthMiddleware {

@@ -25,6 +25,73 @@ pub struct FileInfoResponse {
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ListFilesQuery {
+    bucket_name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileListResponse {
+    files: Vec<FileInfoResponse>,
+}
+
+pub async fn list_files(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    query: web::Query<ListFilesQuery>,
+) -> impl Responder {
+    // Get user ID from request extensions (set by middleware)
+    let user_id = match get_user_id_from_request(&req) {
+        Some(id) => id,
+        None => {
+            return HttpResponse::Unauthorized().json(serde_json::json!({
+                "error": "Authentication required"
+            }));
+        }
+    };
+
+    // Find bucket by name and user
+    let bucket = match Bucket::find_by_name_and_user(&pool, &query.bucket_name, user_id).await {
+        Ok(Some(bucket)) => bucket,
+        Ok(None) => {
+            return HttpResponse::NotFound().json(serde_json::json!({
+                "error": "Bucket not found"
+            }));
+        }
+        Err(_) => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Failed to check bucket"
+            }));
+        }
+    };
+
+    // Find all files in this bucket
+    match File::find_by_bucket_id(&pool, bucket.id).await {
+        Ok(files) => {
+            // Convert files to response format
+            let file_infos = files.into_iter().map(|file| {
+                FileInfoResponse {
+                    id: file.id,
+                    filename: file.filename,
+                    content_type: file.content_type,
+                    size: file.size,
+                    created_at: file.created_at,
+                }
+            }).collect();
+
+            HttpResponse::Ok().json(FileListResponse {
+                files: file_infos,
+            })
+        }
+        Err(e) => {
+            eprintln!("Error fetching files: {:?}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Failed to fetch files"
+            }))
+        }
+    }
+}
+
 pub async fn upload_file(
     req: HttpRequest,
     pool: web::Data<PgPool>,

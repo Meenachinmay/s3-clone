@@ -73,4 +73,24 @@ impl File {
 
         Ok(file)
     }
+
+    pub async fn find_by_bucket_id(
+        pool: &PgPool,
+        bucket_id: Uuid,
+    ) -> Result<Vec<Self>, sqlx::Error> {
+        let files = sqlx::query_as!(
+        File,
+        r#"
+        SELECT id, filename, content_type, size, bucket_id, storage_path, created_at
+        FROM files
+        WHERE bucket_id = $1
+        ORDER BY created_at DESC
+        "#,
+        bucket_id
+    )
+            .fetch_all(pool)
+            .await?;
+
+        Ok(files)
+    }
 }

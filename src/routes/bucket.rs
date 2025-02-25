@@ -17,6 +17,18 @@ pub struct CreateBucketResponse {
     name: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct BucketListResponse {
+    buckets: Vec<BucketInfo>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BucketInfo {
+    id: Uuid,
+    name: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
 pub async fn create_bucket(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -69,6 +81,45 @@ pub async fn create_bucket(
         Err(_) => {
             HttpResponse::InternalServerError().json(serde_json::json!({
                 "error": "Failed to check existing buckets"
+            }))
+        }
+    }
+}
+
+pub async fn list_buckets(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+) -> impl Responder {
+    // Get user ID from request extensions (set by middleware)
+    let user_id = match get_user_id_from_request(&req) {
+        Some(id) => id,
+        None => {
+            return HttpResponse::Unauthorized().json(serde_json::json!({
+                "error": "Authentication required"
+            }));
+        }
+    };
+
+    // Find all buckets for this user
+    match Bucket::find_by_user_id(&pool, user_id).await {
+        Ok(buckets) => {
+            // Convert buckets to response format
+            let bucket_infos = buckets.into_iter().map(|bucket| {
+                BucketInfo {
+                    id: bucket.id,
+                    name: bucket.name,
+                    created_at: bucket.created_at,
+                }
+            }).collect();
+
+            HttpResponse::Ok().json(BucketListResponse {
+                buckets: bucket_infos,
+            })
+        }
+        Err(e) => {
+            eprintln!("Error fetching buckets: {:?}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Failed to fetch buckets"
             }))
         }
     }
