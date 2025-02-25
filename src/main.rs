@@ -1,3 +1,4 @@
+mod authentication;
 mod config;
 mod db;
 mod middleware;
@@ -12,11 +13,14 @@ use actix_cors::Cors;
 use crate::config::Config;
 use crate::db::postgres::init_pool;
 use crate::middleware::auth::ApiKeyMiddleware;
+use authentication::middleware::AuthMiddleware;
 use crate::routes::{auth, bucket, file};
 use crate::storage::local::LocalStorage;
 use crate::storage::Storage;
 use env_logger::Env;
 use log::{error, info};
+use crate::authentication::jwt::JwtConfig;
+use crate::authentication::middleware::AuthMiddlewareService;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -51,6 +55,11 @@ async fn main() -> std::io::Result<()> {
         }
     };
 
+    // Initialize JWT config
+    // In production, get this from environment variables
+    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secretkey".to_string());
+    let jwt_config = JwtConfig::new(jwt_secret, 24 * 60 * 60); // 24 hours expiration
+
     // Start HTTP server
     info!(
         "Starting server at {}:{}",
@@ -65,28 +74,47 @@ async fn main() -> std::io::Result<()> {
             .allow_any_header()
             .max_age(3600);
 
+        let auth_middleware = AuthMiddleware {
+            pool: pool.clone(),
+            jwt_config: jwt_config.clone(),
+        };
+
         App::new()
             .wrap(Logger::new("%r %s %{User-Agent}i %D ms"))  // Add detailed logging
             .wrap(cors)  // Add CORS middleware
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::from(storage.clone()))
+            .app_data(web::Data::new(jwt_config.clone()))
             .service(
                 web::resource("/register")
-                    .route(web::post().to(auth::register))
+                    .route(web::post().to(authentication::register))
+            )
+            .service (
+                web::resource("/login")
+                    .route(web::post().to(authentication::login))
             )
             .service(
                 web::resource("/create-bucket")
-                    .wrap(ApiKeyMiddleware { pool: pool.clone() })
+                    .wrap( AuthMiddleware {
+                        pool: pool.clone(),
+                        jwt_config: jwt_config.clone(),
+                    })
                     .route(web::post().to(bucket::create_bucket))
             )
             .service(
                 web::resource("/upload-file")
-                    .wrap(ApiKeyMiddleware { pool: pool.clone() })
+                    .wrap( AuthMiddleware {
+                        pool: pool.clone(),
+                        jwt_config: jwt_config.clone(),
+                    })
                     .route(web::post().to(file::upload_file))
             )
             .service(
                 web::resource("/get-file")
-                    .wrap(ApiKeyMiddleware { pool: pool.clone() })
+                    .wrap(AuthMiddleware {
+                        pool: pool.clone(),
+                        jwt_config: jwt_config.clone(),
+                    })
                     .route(web::get().to(file::get_file_info))
             )
     })

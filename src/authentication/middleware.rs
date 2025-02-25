@@ -5,17 +5,19 @@ use std::rc::Rc;
 use uuid::Uuid;
 
 use crate::models::User;
+use crate::authentication::JwtConfig;
 
 // Constants for header and query param names
 const AUTHORIZATION_HEADER: &str = "Authorization";
 const BEARER_PREFIX: &str = "Bearer ";
 const API_KEY_PARAM: &str = "apiKey";
 
-pub struct ApiKeyMiddleware {
+pub struct AuthMiddleware {
     pub pool: PgPool,
+    pub jwt_config: JwtConfig,
 }
 
-impl<S, B> Transform<S, ServiceRequest> for ApiKeyMiddleware
+impl<S, B> Transform<S, ServiceRequest> for AuthMiddleware
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error> + 'static,
     S::Future: 'static,
@@ -23,24 +25,26 @@ where
 {
     type Response = ServiceResponse<EitherBody<B, BoxBody>>;
     type Error = Error;
-    type Transform = ApiKeyMiddlewareService<S>;
+    type Transform = AuthMiddlewareService<S>;
     type InitError = ();
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        ready(Ok(ApiKeyMiddlewareService {
+        ready(Ok(AuthMiddlewareService {
             service: Rc::new(service),
             pool: self.pool.clone(),
+            jwt_config: self.jwt_config.clone(),
         }))
     }
 }
 
-pub struct ApiKeyMiddlewareService<S> {
+pub struct AuthMiddlewareService<S> {
     service: Rc<S>,
     pool: PgPool,
+    jwt_config: JwtConfig,
 }
 
-impl<S, B> Service<ServiceRequest> for ApiKeyMiddlewareService<S>
+impl<S, B> Service<ServiceRequest> for AuthMiddlewareService<S>
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error> + 'static,
     S::Future: 'static,
@@ -54,16 +58,39 @@ where
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
         let pool = self.pool.clone();
+        let jwt_config = self.jwt_config.clone();
         let service = self.service.clone();
 
         Box::pin(async move {
-            // Extract API key from query parameters
+
+            // First check for JWT token in Authorization header
+            if let Some(auth_header) = req.headers().get(AUTHORIZATION_HEADER) {
+                if let Ok(auth_str) = auth_header.to_str() {
+                    if auth_str.starts_with(BEARER_PREFIX) {
+                        let token = auth_str.trim_start_matches(BEARER_PREFIX);
+
+                        // Validate JWT token
+                        if let Ok(claims) = jwt_config.validate_token(token) {
+                            // Extract user ID from token claims
+                            if let Ok(user_id) = Uuid::parse_str(&claims.sub) {
+                                // Store user ID in request extensions
+                                req.extensions_mut().insert(user_id);
+                                let res = service.call(req).await?;
+                                // Important: Convert the response to the expected type
+                                return Ok(res.map_into_left_body());
+                            }
+                        }
+                    }
+                }
+            }
+
+            // If no valid JWT, fall back to API key (backward compatibility)
             let query_string = req.query_string();
             let api_key = query_string
                 .split('&')
                 .find_map(|param| {
                     let parts: Vec<&str> = param.split('=').collect();
-                    if parts.len() == 2 && parts[0] == "apiKey" {
+                    if parts.len() == 2 && parts[0] == API_KEY_PARAM {
                         Some(parts[1].to_string())
                     } else {
                         None
@@ -75,23 +102,26 @@ where
                 if let Ok(Some(user)) = User::find_by_api_key(&pool, &api_key).await {
                     // Store user ID in request extensions
                     req.extensions_mut().insert(user.id);
-                    // Process the request with the service and map the response
                     let res = service.call(req).await?;
+                    // Important: Convert the response to the expected type
                     return Ok(res.map_into_left_body());
                 }
             }
 
-            // API key is missing or invalid
-            let (request, _) = req.into_parts();
+            // Neither JWT nor API key is valid
+            // Create the unauthorized response
             let response = HttpResponse::Unauthorized()
                 .json(serde_json::json!({
-                    "error": "Invalid or missing API key"
+                    "error": "Invalid authentication"
                 }));
 
-            // Create a ServiceResponse with the correct body type
-            let service_response = ServiceResponse::new(request, response);
+            // Convert request into a service response with our error response
+            let service_response = ServiceResponse::new(
+                req.into_parts().0,
+                response
+            );
 
-            // Convert to the expected response type
+            // Important: Convert the error response to the expected type
             Ok(service_response.map_into_right_body())
         })
     }
