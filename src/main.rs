@@ -3,7 +3,7 @@ mod config;
 mod db;
 mod middleware;
 mod models;
-mod routes;
+mod handlers;
 mod storage;
 
 use actix_web::{web, App, HttpServer};
@@ -14,7 +14,7 @@ use crate::config::Config;
 use crate::db::postgres::init_pool;
 use crate::middleware::auth::ApiKeyMiddleware;
 use authentication::middleware::AuthMiddleware;
-use crate::routes::{auth, bucket, file};
+use crate::handlers::{bucket, file};
 use crate::storage::local::LocalStorage;
 use crate::storage::Storage;
 use env_logger::Env;
@@ -73,11 +73,6 @@ async fn main() -> std::io::Result<()> {
             .allow_any_method()
             .allow_any_header()
             .max_age(3600);
-
-        let auth_middleware = AuthMiddleware {
-            pool: pool.clone(),
-            jwt_config: jwt_config.clone(),
-        };
 
         App::new()
             .wrap(Logger::new("%r %s %{User-Agent}i %D ms"))  // Add detailed logging

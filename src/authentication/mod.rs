@@ -4,7 +4,6 @@ pub mod middleware;
 use actix_web::{web, HttpResponse, Responder};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use uuid::Uuid;
 
 use crate::models::User;
 use self::jwt::JwtConfig;
